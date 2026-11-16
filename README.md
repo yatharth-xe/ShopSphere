@@ -104,8 +104,23 @@ Authentication uses a short-lived JWT access token (sent as a Bearer header) pai
 
 ### Prerequisites
 - Node.js 18+
-- MongoDB (local via [MongoDB Community Server](https://www.mongodb.com/try/download/community) + [Compass](https://www.mongodb.com/products/tools/compass), or a free [MongoDB Atlas](https://www.mongodb.com/cloud/atlas/register) cluster)
+- MongoDB configured as a replica set for local development. Phase 2 uses multi-document transactions for checkout, inventory, and order-state work; a standalone `mongod` does not support those transactions. Use [MongoDB Community Server](https://www.mongodb.com/try/download/community) + [Compass](https://www.mongodb.com/products/compass), or a free [MongoDB Atlas](https://www.mongodb.com/cloud/atlas/register) cluster.
 - API keys: [Groq](https://console.groq.com) (free) and [Google Gemini](https://aistudio.google.com/apikey) (free tier)
+
+### Local MongoDB Replica Set
+
+For a single-node local replica set, start MongoDB with a replica-set name and initialize it once:
+
+```bash
+mongod --replSet rs0 --dbpath <your-local-mongodb-data-directory>
+mongosh --eval "rs.initiate()"
+```
+
+Use the replica-set connection string in `backend/.env`:
+
+```env
+MONGODB_URI=mongodb://127.0.0.1:27017/shopsphere?replicaSet=rs0
+```
 
 ### Backend Setup
 
@@ -154,7 +169,7 @@ Backend `.env`:
 
 ```env
 PORT=4000
-MONGODB_URI=mongodb://localhost:27017/shopsphere
+MONGODB_URI=mongodb://127.0.0.1:27017/shopsphere?replicaSet=rs0
 ACCESS_TOKEN_SECRET=<random 32+ character string>
 REFRESH_TOKEN_SECRET=<a different random 32+ character string>
 GROQ_API_KEY=<your Groq API key>
@@ -165,6 +180,16 @@ EXPOSE_DEV_RESET_TOKEN=false
 Password reset email delivery is not configured. In a non-production environment only, set `EXPOSE_DEV_RESET_TOKEN=true` to return the reset token for local testing. The token is never logged, and production responses never include it. Until an email provider is configured, production password-reset requests return a generic response but do not send a reset link or create a usable token.
 
 > Never commit `.env` to version control. Confirm it's listed in `.gitignore` before pushing.
+
+### Backend Tests
+
+Run backend tests from `backend/`:
+
+```bash
+npm test
+```
+
+Tests start an isolated single-node in-memory MongoDB replica set through `mongodb-memory-server`. They do not use `MONGODB_URI` and do not connect to the local, development, or production ShopSphere database. The replica set is stopped after the test process completes, and collections are cleared before each test.
 
 ## Project Structure
 

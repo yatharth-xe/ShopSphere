@@ -1,13 +1,21 @@
 import mongoose from "mongoose";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { MongoMemoryReplSet } from "mongodb-memory-server";
 import { createApp } from "../server.js";
 
-let mongoServer;
+let mongoReplSet;
 
 export const connectTestDatabase = async () => {
-  if (!mongoServer) mongoServer = await MongoMemoryServer.create();
+  if (!mongoReplSet) {
+    mongoReplSet = await MongoMemoryReplSet.create({
+      instanceOpts: [{ launchTimeout: 30000 }],
+      replSet: {
+        count: 1,
+        storageEngine: "wiredTiger",
+      },
+    });
+  }
   if (mongoose.connection.readyState === 0) {
-    await mongoose.connect(mongoServer.getUri());
+    await mongoose.connect(mongoReplSet.getUri());
   }
 };
 
@@ -20,9 +28,9 @@ export const clearTestDatabase = async () => {
 
 export const closeTestDatabase = async () => {
   if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
-  if (mongoServer) {
-    await mongoServer.stop();
-    mongoServer = undefined;
+  if (mongoReplSet) {
+    await mongoReplSet.stop();
+    mongoReplSet = undefined;
   }
 };
 
