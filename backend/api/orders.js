@@ -5,6 +5,8 @@ import { ProductModel } from "../models/ProductModel.js";
 import { StoreModel } from "../models/StoreModel.js";
 import { canTransition, assertValidTransition } from "../models/orderStateMachine.js";
 import { verifyToken, verifyRole } from "../middleware/VerifyToken.js";
+import { validateRequest } from "../middleware/validateRequest.js";
+import { checkoutSchema, orderStatusParamsSchema, orderStatusSchema, positiveIntegerSchema } from "../validation/orderSchemas.js";
 
 const router = Router();
 
@@ -17,13 +19,9 @@ const generateOrderNumber = () => {
 // POST /api/orders/checkout
 // Converts the customer's cart into an Order, split into one subOrder per store,
 // and reserves stock for every item so it can't be sold twice.
-router.post("/checkout", verifyToken, verifyRole("customer"), async (req, res) => {
+router.post("/checkout", verifyToken, verifyRole("customer"), validateRequest(checkoutSchema), async (req, res) => {
   try {
     const { shippingAddress, paymentMethod = "cod" } = req.body;
-
-    if (!shippingAddress || !shippingAddress.line1 || !shippingAddress.city) {
-      return res.status(400).json({ message: "A valid shippingAddress is required" });
-    }
 
     const cart = await CartModel.findOne({ user: req.user._id });
     if (!cart || cart.items.length === 0) {
@@ -36,6 +34,9 @@ router.post("/checkout", verifyToken, verifyRole("customer"), async (req, res) =
     const validatedItems = [];
 
     for (const cartItem of cart.items) {
+      if (!positiveIntegerSchema.safeParse(cartItem.quantity).success) {
+        return res.status(400).json({ message: "Cart contains an invalid quantity" });
+      }
       const product = await ProductModel.findById(cartItem.product);
       if (!product || product.status !== "active" || !product.isActive) {
         return res.status(400).json({ message: `A product in your cart is no longer available` });
@@ -189,7 +190,12 @@ router.get("/:id", verifyToken, async (req, res) => {
 // PATCH /api/orders/:id/suborders/:subOrderId/status
 // Moves one seller's portion of the order to the next valid status.
 // Handles the inventory side-effects for each transition.
-router.patch("/:id/suborders/:subOrderId/status", verifyToken, async (req, res) => {
+router.patch(
+  "/:id/suborders/:subOrderId/status",
+  verifyToken,
+  validateRequest(orderStatusParamsSchema, "params"),
+  validateRequest(orderStatusSchema),
+  async (req, res) => {
   try {
     const { status: nextStatus, note } = req.body;
 
@@ -264,7 +270,8 @@ router.patch("/:id/suborders/:subOrderId/status", verifyToken, async (req, res) 
   } catch (err) {
     res.status(500).json({ message: "Could not update suborder status", error: err.message });
   }
-});
+  }
+);
 
 // PATCH /api/orders/:id/suborders/:subOrderId/assign-delivery — [admin/seller] assign a delivery partner
 router.patch(

@@ -14,8 +14,8 @@ const variantSchema = new Schema(
     },
     price: { type: Number, required: true, min: 0 },
     compareAtPrice: { type: Number, min: 0 }, // "original" price for showing discounts
-    stock: { type: Number, required: true, default: 0, min: 0 },
-    reservedStock: { type: Number, default: 0, min: 0 }, // held during checkout, released/committed on order state change
+    stock: { type: Number, required: true, default: 0, min: 0, validate: Number.isInteger },
+    reservedStock: { type: Number, default: 0, min: 0, validate: Number.isInteger }, // held during checkout, released/committed on order state change
     imageUrls: [{ type: String }],
     isActive: { type: Boolean, default: true },
   },
@@ -67,6 +67,14 @@ const productSchema = new Schema(
   },
   { timestamps: true }
 );
+
+productSchema.pre("validate", function () {
+  for (const variant of this.variants || []) {
+    if (variant.reservedStock > variant.stock) {
+      variant.invalidate("reservedStock", "reservedStock cannot exceed stock");
+    }
+  }
+});
 
 productSchema.index({ slug: 1 });
 productSchema.index({ store: 1 });

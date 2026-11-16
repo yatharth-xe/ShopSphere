@@ -4,6 +4,8 @@ import { StoreModel } from "../models/StoreModel.js";
 import { AuditLogModel } from "../models/AuditLogModel.js";
 import { notifyUser } from "../models/notifyUser.js";
 import { verifyToken, verifyRole } from "../middleware/VerifyToken.js";
+import { validateRequest } from "../middleware/validateRequest.js";
+import { productCreateVariantsSchema, productUpdateVariantsSchema, stockParamsSchema, stockUpdateSchema } from "../validation/productSchemas.js";
 
 const router = Router();
 
@@ -115,6 +117,11 @@ router.post("/", verifyToken, verifyRole("seller"), async (req, res) => {
       });
     }
 
+    const parsedVariants = productCreateVariantsSchema.safeParse(variants);
+    if (!parsedVariants.success) {
+      return res.status(400).json({ message: "Invalid product variants" });
+    }
+
     const store = await StoreModel.findOne({ seller: req.user._id });
     if (!store) {
       return res.status(400).json({ message: "You must create a store before adding products" });
@@ -130,7 +137,7 @@ router.post("/", verifyToken, verifyRole("seller"), async (req, res) => {
     }
 
     // basePrice is denormalized from the lowest variant price for fast catalog display
-    const basePrice = Math.min(...variants.map((v) => v.price));
+    const basePrice = Math.min(...parsedVariants.data.map((variant) => variant.price));
 
     const product = await ProductModel.create({
       store: store._id,
@@ -139,9 +146,9 @@ router.post("/", verifyToken, verifyRole("seller"), async (req, res) => {
       slug,
       description,
       attributes,
-      variants,
+      variants: parsedVariants.data,
       basePrice,
-      thumbnailUrl: variants[0]?.imageUrls?.[0],
+      thumbnailUrl: parsedVariants.data[0]?.imageUrls?.[0],
       tags,
       status: "pending_review", // goes live only after admin approval
     });
@@ -172,10 +179,52 @@ router.patch("/:id", verifyToken, verifyRole("seller"), async (req, res) => {
       }
     });
 
-    // if variants array is passed, replace it and recalc basePrice
-    if (req.body.variants) {
-      product.variants = req.body.variants;
-      product.basePrice = Math.min(...req.body.variants.map((v) => v.price));
+    // Update existing variant subdocuments in place so cart and order references remain valid.
+    if (req.body.variants !== undefined) {
+      const parsedVariants = productUpdateVariantsSchema.safeParse(req.body.variants);
+      if (!parsedVariants.success) {
+        return res.status(400).json({ message: "Invalid product variants" });
+      }
+
+      const incomingIds = parsedVariants.data
+        .filter((variant) => variant._id)
+        .map((variant) => variant._id);
+      if (new Set(incomingIds).size !== incomingIds.length) {
+        return res.status(400).json({ message: "Product variants must not contain duplicate IDs" });
+      }
+
+      const currentVariants = [...product.variants];
+      for (const currentVariant of currentVariants) {
+        const retained = incomingIds.includes(currentVariant._id.toString());
+        if (!retained && currentVariant.reservedStock > 0) {
+          return res.status(400).json({ message: "Cannot remove a variant with reserved stock" });
+        }
+      }
+
+      for (const incomingVariant of parsedVariants.data) {
+        const { _id, ...variantChanges } = incomingVariant;
+        if (!_id) {
+          product.variants.push({ ...variantChanges, reservedStock: 0 });
+          continue;
+        }
+
+        const currentVariant = product.variants.id(_id);
+        if (!currentVariant) {
+          return res.status(400).json({ message: "Product variant does not belong to this product" });
+        }
+        if (variantChanges.stock < currentVariant.reservedStock) {
+          return res.status(400).json({ message: "Stock cannot be lower than reserved stock" });
+        }
+        currentVariant.set(variantChanges);
+      }
+
+      for (const currentVariant of currentVariants) {
+        if (!incomingIds.includes(currentVariant._id.toString())) {
+          currentVariant.deleteOne();
+        }
+      }
+
+      product.basePrice = Math.min(...product.variants.map((variant) => variant.price));
     }
 
     // any edit sends it back for re-review rather than silently changing a live listing
@@ -293,13 +342,11 @@ router.patch(
   "/:id/variants/:variantId/stock",
   verifyToken,
   verifyRole("seller"),
+  validateRequest(stockParamsSchema, "params"),
+  validateRequest(stockUpdateSchema),
   async (req, res) => {
     try {
       const { stock } = req.body;
-
-      if (typeof stock !== "number" || stock < 0) {
-        return res.status(400).json({ message: "stock must be a non-negative number" });
-      }
 
       const product = await ProductModel.findById(req.params.id).populate("store");
       if (!product) {
@@ -313,6 +360,10 @@ router.patch(
       const variant = product.variants.id(req.params.variantId);
       if (!variant) {
         return res.status(404).json({ message: "Variant not found" });
+      }
+
+      if (stock < variant.reservedStock) {
+        return res.status(400).json({ message: "Stock cannot be lower than reserved stock" });
       }
 
       variant.stock = stock;

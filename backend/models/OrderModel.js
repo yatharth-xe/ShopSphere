@@ -11,7 +11,7 @@ const orderItemSchema = new Schema(
     variantAttributes: { type: Map, of: String },
     imageUrl: { type: String },
     price: { type: Number, required: true }, // price per unit at time of order
-    quantity: { type: Number, required: true, min: 1 },
+    quantity: { type: Number, required: true, min: 1, validate: Number.isInteger },
   },
   { _id: false }
 );

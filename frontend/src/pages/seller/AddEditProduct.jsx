@@ -68,6 +68,7 @@ const AddEditProduct = () => {
         category: form.category,
         tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
         variants: form.variants.map((v) => ({
+          ...(v._id ? { _id: v._id } : {}),
           sku: v.sku,
           price: Number(v.price),
           stock: Number(v.stock),

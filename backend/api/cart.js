@@ -2,6 +2,8 @@ import { Router } from "express";
 import { CartModel } from "../models/CartModel.js";
 import { ProductModel } from "../models/ProductModel.js";
 import { verifyToken, verifyRole } from "../middleware/VerifyToken.js";
+import { validateRequest } from "../middleware/validateRequest.js";
+import { cartItemParamsSchema, cartItemSchema, cartQuantitySchema } from "../validation/orderSchemas.js";
 
 const router = Router();
 
@@ -24,16 +26,9 @@ router.get("/", verifyToken, verifyRole("customer"), async (req, res) => {
 });
 
 // POST /api/cart/items — add an item (or increase quantity if it already exists)
-router.post("/items", verifyToken, verifyRole("customer"), async (req, res) => {
+router.post("/items", verifyToken, verifyRole("customer"), validateRequest(cartItemSchema), async (req, res) => {
   try {
     const { productId, variantId, quantity = 1 } = req.body;
-
-    if (!productId || !variantId) {
-      return res.status(400).json({ message: "productId and variantId are required" });
-    }
-    if (quantity < 1) {
-      return res.status(400).json({ message: "quantity must be at least 1" });
-    }
 
     const product = await ProductModel.findById(productId);
     if (!product || product.status !== "active" || !product.isActive) {
@@ -80,13 +75,15 @@ router.post("/items", verifyToken, verifyRole("customer"), async (req, res) => {
 });
 
 // PATCH /api/cart/items/:itemId — update quantity of a cart item
-router.patch("/items/:itemId", verifyToken, verifyRole("customer"), async (req, res) => {
+router.patch(
+  "/items/:itemId",
+  verifyToken,
+  verifyRole("customer"),
+  validateRequest(cartItemParamsSchema, "params"),
+  validateRequest(cartQuantitySchema),
+  async (req, res) => {
   try {
     const { quantity } = req.body;
-
-    if (typeof quantity !== "number" || quantity < 1) {
-      return res.status(400).json({ message: "quantity must be at least 1" });
-    }
 
     const cart = await CartModel.findOne({ user: req.user._id });
     if (!cart) {
@@ -114,7 +111,8 @@ router.patch("/items/:itemId", verifyToken, verifyRole("customer"), async (req, 
   } catch (err) {
     res.status(500).json({ message: "Could not update cart item", error: err.message });
   }
-});
+  }
+);
 
 // DELETE /api/cart/items/:itemId — remove a single item
 router.delete("/items/:itemId", verifyToken, verifyRole("customer"), async (req, res) => {
