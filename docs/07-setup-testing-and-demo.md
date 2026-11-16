@@ -22,6 +22,27 @@ EXPOSE_DEV_RESET_TOKEN=false
 
 `NODE_ENV` is read by password-reset behavior. Never commit secrets, tokens, credentials, or real user information.
 
+## Bootstrap the first local development admin
+
+Public registration creates customer accounts only, and the staff endpoint cannot create admins. For a fresh local demo database, the repository provides an explicit one-time bootstrap command. It is guarded by both `NODE_ENV=development` and an exact MongoDB URI match for `mongodb://127.0.0.1:27018/shopsphere_demo?replicaSet=rs0`. It refuses to proceed if any admin already exists or the requested email belongs to any existing account.
+
+From `backend/`, supply the name, email, and password as temporary process environment variables using a local secret manager or another method that does not put the password in shell history or command-line arguments. For example, set the non-secret guards in PowerShell:
+
+```powershell
+$env:NODE_ENV = "development"
+$env:MONGODB_URI = "mongodb://127.0.0.1:27018/shopsphere_demo?replicaSet=rs0"
+$env:ADMIN_NAME = "Local Demo Admin"
+$env:ADMIN_EMAIL = "admin@example.test"
+```
+
+Set `ADMIN_PASSWORD` through the chosen local secret mechanism, then invoke:
+
+```powershell
+npm run bootstrap:local-admin
+```
+
+The script reuses `registerSchema` for name/email/password validation and `UserModel.save()` for the existing bcrypt password hook. It does not expose an HTTP endpoint and does not update or elevate an existing account. It never prints the password and disconnects from MongoDB on success or failure. Do not store the admin password in `.env`, source control, terminal transcripts, or project documentation. Remove temporary environment values from the shell after use.
+
 For a local single-node replica set, MongoDB can be launched with a replica-set name and initialized once. The exact data-directory path is environment-specific:
 
 ```bash
