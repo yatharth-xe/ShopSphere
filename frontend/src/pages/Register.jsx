@@ -11,8 +11,6 @@ import {
   EyeOff,
   ArrowRight,
   AlertCircle,
-  Store,
-  ShoppingBag as CustomerIcon,
 } from "lucide-react";
 
 const Register = () => {
@@ -23,7 +21,6 @@ const Register = () => {
     email: "",
     password: "",
     phone: "",
-    role: "customer",
   });
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
@@ -34,16 +31,8 @@ const Register = () => {
     setError("");
     setLoading(true);
     try {
-      const response = await register(form);
-      
-      // Handle both cases: if 'register' returns user directly OR wrapped inside response object
-      const registeredUser = response?.user || response;
-
-      if (registeredUser?.role === "seller") {
-        navigate("/seller/dashboard");
-      } else {
-        navigate("/");
-      }
+      await register(form);
+      navigate("/");
     } catch (err) {
       console.error("Registration Error Catch:", err);
       setError(
@@ -82,40 +71,6 @@ const Register = () => {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Role Selector Tabs */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-2">
-              Account Type
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setForm({ ...form, role: "customer" })}
-                className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
-                  form.role === "customer"
-                    ? "border-emerald-600 bg-emerald-50 text-emerald-800 ring-2 ring-emerald-500/20"
-                    : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                <CustomerIcon className="w-3.5 h-3.5" />
-                Customer
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setForm({ ...form, role: "seller" })}
-                className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
-                  form.role === "seller"
-                    ? "border-emerald-600 bg-emerald-50 text-emerald-800 ring-2 ring-emerald-500/20"
-                    : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                <Store className="w-3.5 h-3.5" />
-                Merchant / Seller
-              </button>
-            </div>
-          </div>
-
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               Full Name
@@ -173,8 +128,8 @@ const Register = () => {
               <input
                 type={showPassword ? "text" : "password"}
                 required
-                minLength={6}
-                placeholder="At least 6 characters"
+                minLength={8}
+                placeholder="At least 8 characters"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
                 className="w-full bg-slate-50 text-slate-800 text-sm rounded-xl pl-9 pr-10 py-2.5 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"

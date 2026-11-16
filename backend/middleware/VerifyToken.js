@@ -17,6 +17,21 @@ export const verifyToken = async (req, res, next) => {
       return res.status(401).json({ message: "User not found or inactive" });
     }
 
+    const allowedDuringPasswordChange = new Set([
+      "/api/auth/change-password",
+      "/api/auth/force-change-password",
+      "/api/auth/logout",
+      "/api/auth/me",
+      "/api/users/me",
+    ]);
+    const requestPath = req.originalUrl.split("?")[0];
+    if (user.mustChangePassword && !allowedDuringPasswordChange.has(requestPath)) {
+      return res.status(403).json({
+        code: "PASSWORD_CHANGE_REQUIRED",
+        message: "Change your temporary password before continuing",
+      });
+    }
+
     req.user = user; // available in every protected route from here on
     next();
   } catch (err) {

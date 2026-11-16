@@ -2,8 +2,54 @@ import { Router } from "express";
 import { UserModel } from "../models/UserModel.js";
 import { AuditLogModel } from "../models/AuditLogModel.js";
 import { verifyToken, verifyRole } from "../middleware/VerifyToken.js";
+import crypto from "crypto";
+import { validateRequest } from "../middleware/validateRequest.js";
+import { createStaffSchema } from "../validation/authSchemas.js";
 
 const router = Router();
+
+// POST /api/users/staff — [admin] provision a seller, support agent, or delivery partner.
+router.post("/staff", verifyToken, verifyRole("admin"), validateRequest(createStaffSchema), async (req, res) => {
+  try {
+    const { name, email, phone, role } = req.body;
+    const existing = await UserModel.findOne({ email });
+    if (existing) return res.status(409).json({ message: "Email already in use" });
+
+    const temporaryPassword = crypto.randomBytes(24).toString("base64url");
+    const user = new UserModel({
+      name,
+      email,
+      phone,
+      role,
+      password: temporaryPassword,
+      mustChangePassword: true,
+      ...(role === "delivery" ? { deliveryProfile: {} } : {}),
+      ...(role === "seller" ? { sellerProfile: {} } : {}),
+    });
+    await user.save();
+    try {
+      await AuditLogModel.create({
+        actor: req.user._id,
+        action: "STAFF_ACCOUNT_CREATED",
+        targetType: "User",
+        targetId: user._id,
+        details: { role },
+      });
+    } catch {
+      console.error("Could not write staff account audit log");
+    }
+
+    res.status(201).json({
+      message: "Staff account created. Share this temporary password securely; it is shown only once.",
+      user,
+      temporaryPassword,
+    });
+  } catch (err) {
+    if (err.code === 11000) return res.status(409).json({ message: "Email already in use" });
+    console.error("Staff account creation failed");
+    res.status(500).json({ message: "Could not create staff account" });
+  }
+});
 
 // GET /api/users/me
 router.get("/me", verifyToken, async (req, res) => {

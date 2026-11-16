@@ -9,6 +9,8 @@ const axiosInstance = axios.create({
   }
 });
 
+let refreshInFlight = null;
+
 // Request Interceptor
 axiosInstance.interceptors.request.use(
   (config) => {
@@ -26,21 +28,38 @@ axiosInstance.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
+    if (!originalRequest) return Promise.reject(error);
 
     // Do NOT run refresh logic for login/register endpoints!
-    const isAuthEndpoint = originalRequest.url.includes("/auth/login") || originalRequest.url.includes("/auth/register");
+    const isAuthEndpoint = ["/auth/login", "/auth/register", "/auth/refresh-token"].some((path) =>
+      originalRequest.url?.includes(path)
+    );
 
     if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       originalRequest._retry = true;
+      const currentAccessToken = localStorage.getItem("accessToken");
+      const sentAuthorization = originalRequest.headers?.Authorization || originalRequest.headers?.get?.("Authorization");
+      if (currentAccessToken && sentAuthorization && sentAuthorization !== `Bearer ${currentAccessToken}`) {
+        originalRequest.headers = originalRequest.headers || {};
+        originalRequest.headers.Authorization = `Bearer ${currentAccessToken}`;
+        return axiosInstance(originalRequest);
+      }
       try {
-        const refreshToken = localStorage.getItem("refreshToken");
-        if (!refreshToken) throw new Error("No refresh token available");
-
-        // Use plain axios to avoid infinite loops
-        const { data } = await axios.post(`${BASE_URL}/auth/refresh-token`, { refreshToken });
-        
-        localStorage.setItem("accessToken", data.accessToken);
-        originalRequest.headers.Authorization = `Bearer ${data.accessToken}`;
+        if (!refreshInFlight) {
+          refreshInFlight = (async () => {
+            const refreshToken = localStorage.getItem("refreshToken");
+            if (!refreshToken) throw new Error("No refresh token available");
+            const { data } = await axios.post(`${BASE_URL}/auth/refresh-token`, { refreshToken });
+            localStorage.setItem("accessToken", data.accessToken);
+            localStorage.setItem("refreshToken", data.refreshToken);
+            return data.accessToken;
+          })().finally(() => {
+            refreshInFlight = null;
+          });
+        }
+        const accessToken = await refreshInFlight;
+        originalRequest.headers = originalRequest.headers || {};
+        originalRequest.headers.Authorization = `Bearer ${accessToken}`;
         
         return axiosInstance(originalRequest);
       } catch (refreshErr) {

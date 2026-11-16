@@ -46,8 +46,8 @@ ShopSphere is a marketplace where multiple independent sellers list and manage t
 
 **Accounts & Access**
 - JWT authentication (short-lived access token + long-lived refresh token)
-- Five roles: Customer, Seller, Admin, Support Agent, Delivery Partner
-- Password reset flow, email verification tokens
+- Five roles: Customer, Seller, Admin, Support Agent, Delivery Partner. Public registration creates customer accounts; an admin provisions seller, support, and delivery accounts.
+- Password change and development-only password reset token flow; production reset delivery is unavailable until an email provider is configured.
 - Role-based route protection on both API and frontend
 
 **Operations**
@@ -142,7 +142,11 @@ The app will run on `http://localhost:5173`.
 Admin accounts cannot be created through public registration by design. To get one:
 1. Register a normal account through the app.
 2. In MongoDB Compass (or Atlas), open the `users` collection and manually change that document's `role` field to `"admin"`.
-3. Log out and log back in — the new JWT will carry the updated role.
+3. Log out and log back in. Admin accounts are bootstrapped manually and cannot be created through public registration or the staff creation endpoint.
+
+### Creating Staff Accounts
+
+An authenticated admin can create seller, support, and delivery accounts from **Admin → Manage Users**. The server generates a temporary password and displays it once in the admin response. Share it securely; the account must change it at first login before using other protected routes. This endpoint cannot create admin accounts.
 
 ## Environment Variables
 
@@ -155,7 +159,10 @@ ACCESS_TOKEN_SECRET=<random 32+ character string>
 REFRESH_TOKEN_SECRET=<a different random 32+ character string>
 GROQ_API_KEY=<your Groq API key>
 GEMINI_API_KEY=<your Gemini API key>
+EXPOSE_DEV_RESET_TOKEN=false
 ```
+
+Password reset email delivery is not configured. In a non-production environment only, set `EXPOSE_DEV_RESET_TOKEN=true` to return the reset token for local testing. The token is never logged, and production responses never include it. Until an email provider is configured, production password-reset requests return a generic response but do not send a reset link or create a usable token.
 
 > Never commit `.env` to version control. Confirm it's listed in `.gitignore` before pushing.
 
@@ -251,8 +258,8 @@ Product descriptions are generated from structured attributes (title, category, 
 
 ## Known Limitations
 
-- No automated test suite.
-- Password reset and email verification tokens are logged to the server console rather than sent via a real email service.
+- Backend security/API tests run with `npm test` in `backend/`; frontend automated tests are not configured yet.
+- Password reset and email verification delivery are not connected to an email service. A reset token can be returned only for explicitly enabled non-production local testing; production password reset remains unavailable until email delivery is configured.
 - Product images are supplied as URLs; there is no file upload integration.
 - CORS is currently open to all origins (`cors()` with no restrictions) — acceptable for development/demo, but should be locked to specific origins before any real production use.
 

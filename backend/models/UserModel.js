@@ -66,6 +66,7 @@ const userSchema = new Schema(
 
     isEmailVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
+    mustChangePassword: { type: Boolean, default: false },
 
     addresses: [addressSchema],
     wishlist: [{ type: Schema.Types.ObjectId, ref: "Product" }],

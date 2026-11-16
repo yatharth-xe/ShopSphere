@@ -17,7 +17,8 @@ const Login = () => {
     setLoading(true);
     try {
       const user = await login(form.email, form.password);
-      if (user.role === "seller") navigate("/seller/dashboard");
+      if (user.mustChangePassword) navigate("/change-password");
+      else if (user.role === "seller") navigate("/seller/dashboard");
       else if (user.role === "admin") navigate("/admin/dashboard");
       else navigate("/");
     } catch (err) {

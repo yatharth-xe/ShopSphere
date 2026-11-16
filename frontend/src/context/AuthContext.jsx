@@ -56,6 +56,13 @@ export const AuthProvider = ({ children }) => {
   }
 };
 
+  const completeForcedPasswordChange = async (newPassword) => {
+    const { data } = await axiosInstance.patch("/auth/force-change-password", { newPassword });
+    localStorage.setItem("user", JSON.stringify(data.user));
+    setUser(data.user);
+    return data.user;
+  };
+
   const logout = async () => {
     try {
       const refreshToken = localStorage.getItem("refreshToken");
@@ -70,7 +77,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, setUser }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, setUser, completeForcedPasswordChange }}>
       {children}
     </AuthContext.Provider>
   );

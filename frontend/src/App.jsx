@@ -15,6 +15,7 @@ import OrderDetail from "./pages/OrderDetail";
 import Wishlist from "./pages/Wishlist";
 import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
+import ForcePasswordChange from "./pages/ForcePasswordChange";
 
 import SellerDashboard from "./pages/seller/SellerDashboard";
 import MyStore from "./pages/seller/MyStore";
@@ -45,6 +46,7 @@ function App() {
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/change-password" element={<ProtectedRoute><ForcePasswordChange /></ProtectedRoute>} />
           <Route path="/products/:id" element={<ProductDetail />} />
 
           {/* Customer only */}

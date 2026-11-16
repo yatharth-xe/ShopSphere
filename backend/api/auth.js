@@ -3,6 +3,15 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { UserModel } from "../models/UserModel.js";
 import { verifyToken } from "../middleware/VerifyToken.js";
+import { validateRequest } from "../middleware/validateRequest.js";
+import {
+  registerSchema, loginSchema, refreshSchema, logoutSchema, changePasswordSchema,
+  forcedPasswordChangeSchema, forgotPasswordSchema, resetPasswordSchema, verifyEmailParamsSchema,
+} from "../validation/authSchemas.js";
+import {
+  loginLimiter, registrationLimiter, passwordRecoveryLimiter, refreshLimiter,
+  emailVerificationLimiter, passwordChangeLimiter,
+} from "../middleware/authRateLimits.js";
 
 const router = Router();
 
@@ -13,21 +22,14 @@ const makeAccessToken = (user) =>
   });
 
 const makeRefreshToken = (user) =>
-  jwt.sign({ userId: user._id }, process.env.REFRESH_TOKEN_SECRET, {
+  jwt.sign({ userId: user._id, jti: crypto.randomUUID() }, process.env.REFRESH_TOKEN_SECRET, {
     expiresIn: "7d",
   });
 
 // POST /api/auth/register
-router.post("/register", async (req, res) => {
+router.post("/register", registrationLimiter, validateRequest(registerSchema), async (req, res) => {
   try {
-    const { name, email, password, phone, role } = req.body;
-
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: "Name, email, and password are required" });
-    }
-
-    const allowedRoles = ["customer", "seller", "delivery", "support"];
-    const finalRole = allowedRoles.includes(role) ? role : "customer";
+    const { name, email, password, phone } = req.body;
 
     // 1. Check existing user
     const existing = await UserModel.findOne({ email });
@@ -45,7 +47,7 @@ router.post("/register", async (req, res) => {
       email,
       password,
       phone,
-      role: finalRole,
+      role: "customer",
       emailVerificationToken,
     });
 
@@ -58,8 +60,6 @@ router.post("/register", async (req, res) => {
     // 5. Save ONCE to Database
     await user.save();
 
-    console.log(`Registered user successfully: ${email}`);
-
     // Return response immediately
     return res.status(201).json({
       message: "Registered successfully",
@@ -68,23 +68,20 @@ router.post("/register", async (req, res) => {
       refreshToken,
     });
   } catch (err) {
-    console.error("REGISTER API CRASH:", err);
+    if (err.code === 11000) return res.status(409).json({ message: "Email already in use" });
+    console.error("Registration failed");
     // Explicitly send response back so frontend doesn't hang!
     return res.status(500).json({ 
       message: "Registration failed", 
-      error: err.message || "Internal server error" 
+      error: "Internal server error"
     });
   }
 });
 
 // POST /api/auth/login
-router.post("/login", async (req, res) => {
+router.post("/login", loginLimiter, validateRequest(loginSchema), async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required" });
-    }
 
     const user = await UserModel.findOne({ email }).select("+password +refreshTokens");
     if (!user) {
@@ -104,23 +101,21 @@ router.post("/login", async (req, res) => {
     const refreshToken = makeRefreshToken(user);
 
     user.refreshTokens.push(refreshToken);
+    user.refreshTokens = user.refreshTokens.slice(-10);
     user.lastLoginAt = new Date();
     await user.save();
 
     res.status(200).json({ message: "Login successful", user, accessToken, refreshToken });
   } catch (err) {
-    res.status(500).json({ message: "Login failed", error: err.message });
+    console.error("Login failed");
+    res.status(500).json({ message: "Login failed" });
   }
 });
 
 // POST /api/auth/refresh-token
-router.post("/refresh-token", async (req, res) => {
+router.post("/refresh-token", refreshLimiter, validateRequest(refreshSchema), async (req, res) => {
   try {
     const { refreshToken: incomingToken } = req.body;
-    if (!incomingToken) {
-      return res.status(401).json({ message: "Refresh token required" });
-    }
-
     let decoded;
     try {
       decoded = jwt.verify(incomingToken, process.env.REFRESH_TOKEN_SECRET);
@@ -129,22 +124,34 @@ router.post("/refresh-token", async (req, res) => {
     }
 
     const user = await UserModel.findById(decoded.userId).select("+refreshTokens");
-    if (!user || !user.refreshTokens.includes(incomingToken)) {
+    if (!user || !user.isActive || !user.refreshTokens.includes(incomingToken)) {
       return res.status(401).json({ message: "Refresh token not recognized" });
     }
 
     const newAccessToken = makeAccessToken(user);
-    res.status(200).json({ accessToken: newAccessToken });
+    const newRefreshToken = makeRefreshToken(user);
+    const rotatedUser = await UserModel.collection.findOneAndUpdate(
+      { _id: user._id, isActive: true, refreshTokens: incomingToken },
+      [{ $set: { refreshTokens: { $concatArrays: [
+        { $filter: { input: "$refreshTokens", as: "token", cond: { $ne: ["$$token", incomingToken] } } },
+        [newRefreshToken],
+      ] } } }],
+      { returnDocument: "after" }
+    );
+    const rotatedDocument = rotatedUser?.value ?? rotatedUser;
+    if (!rotatedDocument?._id) return res.status(401).json({ message: "Refresh token already used or revoked" });
+    res.status(200).json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
   } catch (err) {
-    res.status(500).json({ message: "Could not refresh token", error: err.message });
+    console.error("Could not refresh token");
+    res.status(500).json({ message: "Could not refresh token" });
   }
 });
 
 // POST /api/auth/logout
-router.post("/logout", verifyToken, async (req, res) => {
+router.post("/logout", verifyToken, validateRequest(logoutSchema), async (req, res) => {
   try {
     const { refreshToken: incomingToken } = req.body;
-    const user = req.user;
+    const user = await UserModel.findById(req.user._id).select("+refreshTokens");
 
     if (incomingToken) {
       user.refreshTokens = user.refreshTokens.filter((t) => t !== incomingToken);
@@ -153,7 +160,8 @@ router.post("/logout", verifyToken, async (req, res) => {
 
     res.status(200).json({ message: "Logged out successfully" });
   } catch (err) {
-    res.status(500).json({ message: "Logout failed", error: err.message });
+    console.error("Logout failed");
+    res.status(500).json({ message: "Logout failed" });
   }
 });
 
@@ -163,13 +171,9 @@ router.get("/me", verifyToken, async (req, res) => {
 });
 
 // PATCH /api/auth/change-password
-router.patch("/change-password", verifyToken, async (req, res) => {
+router.patch("/change-password", verifyToken, passwordChangeLimiter, validateRequest(changePasswordSchema), async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body;
-
-    if (!oldPassword || !newPassword) {
-      return res.status(400).json({ message: "Old and new password are required" });
-    }
 
     const user = await UserModel.findById(req.user._id).select("+password");
 
@@ -183,21 +187,32 @@ router.patch("/change-password", verifyToken, async (req, res) => {
 
     res.status(200).json({ message: "Password changed successfully" });
   } catch (err) {
-    res.status(500).json({ message: "Could not change password", error: err.message });
+    console.error("Could not change password");
+    res.status(500).json({ message: "Could not change password" });
+  }
+});
+
+router.patch("/force-change-password", verifyToken, passwordChangeLimiter, validateRequest(forcedPasswordChangeSchema), async (req, res) => {
+  try {
+    if (!req.user.mustChangePassword) {
+      return res.status(400).json({ message: "A forced password change is not required" });
+    }
+    req.user.password = req.body.newPassword;
+    req.user.mustChangePassword = false;
+    await req.user.save();
+    res.status(200).json({ message: "Password changed successfully", user: req.user });
+  } catch (err) {
+    console.error("Could not complete required password change");
+    res.status(500).json({ message: "Could not change password" });
   }
 });
 
 // POST /api/auth/forgot-password
-// Generates a reset token. No email service is wired up yet, so for now the
-// token is returned in the response + logged to console so you can test the flow.
-// Swap this out for actually sending an email via nodemailer once you set up SMTP.
-router.post("/forgot-password", async (req, res) => {
+// Email delivery is not configured. A development token is returned only when
+// EXPOSE_DEV_RESET_TOKEN=true and NODE_ENV is not production.
+router.post("/forgot-password", passwordRecoveryLimiter, validateRequest(forgotPasswordSchema), async (req, res) => {
   try {
     const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ message: "email is required" });
-    }
-
     const user = await UserModel.findOne({ email });
     // always respond the same way whether or not the email exists —
     // this stops people from using this endpoint to check which emails are registered
@@ -207,31 +222,28 @@ router.post("/forgot-password", async (req, res) => {
       });
     }
 
-    const resetToken = crypto.randomBytes(32).toString("hex");
-    user.passwordResetToken = crypto.createHash("sha256").update(resetToken).digest("hex");
-    user.passwordResetExpires = Date.now() + 30 * 60 * 1000; // 30 minutes
-    await user.save();
-
-    // TODO: replace this console.log with an actual email send once SMTP is configured
-    console.log(`Password reset token for ${email}: ${resetToken}`);
-
+    const devTokenEnabled = process.env.NODE_ENV !== "production" && process.env.EXPOSE_DEV_RESET_TOKEN === "true";
+    let resetToken;
+    if (devTokenEnabled) {
+      resetToken = crypto.randomBytes(32).toString("hex");
+      user.passwordResetToken = crypto.createHash("sha256").update(resetToken).digest("hex");
+      user.passwordResetExpires = Date.now() + 30 * 60 * 1000;
+      await user.save();
+    }
     res.status(200).json({
       message: "If this email is registered, a reset link has been sent",
-      devResetToken: resetToken, // remove this field once real email sending is wired up
+      ...(devTokenEnabled ? { devResetToken: resetToken } : {}),
     });
   } catch (err) {
-    res.status(500).json({ message: "Could not process request", error: err.message });
+    console.error("Could not process password recovery request");
+    res.status(500).json({ message: "Could not process request" });
   }
 });
 
 // POST /api/auth/reset-password
-router.post("/reset-password", async (req, res) => {
+router.post("/reset-password", passwordRecoveryLimiter, validateRequest(resetPasswordSchema), async (req, res) => {
   try {
     const { token, newPassword } = req.body;
-    if (!token || !newPassword) {
-      return res.status(400).json({ message: "token and newPassword are required" });
-    }
-
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
     const user = await UserModel.findOne({
@@ -244,6 +256,7 @@ router.post("/reset-password", async (req, res) => {
     }
 
     user.password = newPassword; // pre-save hook re-hashes
+    user.mustChangePassword = false;
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
     user.refreshTokens = []; // log out of all sessions after a password reset, for safety
@@ -251,12 +264,13 @@ router.post("/reset-password", async (req, res) => {
 
     res.status(200).json({ message: "Password reset successful, please log in again" });
   } catch (err) {
-    res.status(500).json({ message: "Could not reset password", error: err.message });
+    console.error("Could not reset password");
+    res.status(500).json({ message: "Could not reset password" });
   }
 });
 
 // GET /api/auth/verify-email/:token
-router.get("/verify-email/:token", async (req, res) => {
+router.get("/verify-email/:token", emailVerificationLimiter, validateRequest(verifyEmailParamsSchema, "params"), async (req, res) => {
   try {
     const hashedToken = crypto.createHash("sha256").update(req.params.token).digest("hex");
 
@@ -274,7 +288,8 @@ router.get("/verify-email/:token", async (req, res) => {
 
     res.status(200).json({ message: "Email verified successfully" });
   } catch (err) {
-    res.status(500).json({ message: "Could not verify email", error: err.message });
+    console.error("Could not verify email");
+    res.status(500).json({ message: "Could not verify email" });
   }
 });
 

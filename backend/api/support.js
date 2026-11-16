@@ -1,17 +1,19 @@
 import { Router } from "express";
 import { SupportTicketModel } from "../models/SupportTicketModel.js";
+import { UserModel } from "../models/UserModel.js";
 import { verifyToken, verifyRole } from "../middleware/VerifyToken.js";
+import { validateRequest } from "../middleware/validateRequest.js";
+import {
+  assignTicketSchema, createTicketSchema, ticketIdParamsSchema,
+  ticketMessageSchema, ticketStatusSchema,
+} from "../validation/supportSchemas.js";
 
 const router = Router();
 
 // POST /api/support — [customer] create a ticket
-router.post("/", verifyToken, verifyRole("customer"), async (req, res) => {
+router.post("/", verifyToken, verifyRole("customer"), validateRequest(createTicketSchema), async (req, res) => {
   try {
     const { subject, category, relatedOrder, relatedReturn, message } = req.body;
-
-    if (!subject || !message) {
-      return res.status(400).json({ message: "subject and an initial message are required" });
-    }
 
     const ticket = await SupportTicketModel.create({
       customer: req.user._id,
@@ -32,14 +34,18 @@ router.post("/", verifyToken, verifyRole("customer"), async (req, res) => {
 router.get("/", verifyToken, async (req, res) => {
   try {
     const { status } = req.query;
+    if (status && !["open", "in_progress", "resolved", "closed"].includes(status)) {
+      return res.status(400).json({ message: "Invalid ticket status filter" });
+    }
     let filter = {};
 
     if (req.user.role === "customer") {
       filter = { customer: req.user._id };
     } else if (req.user.role === "support") {
       filter = { $or: [{ assignedTo: req.user._id }, { assignedTo: null }] };
+    } else if (req.user.role !== "admin") {
+      return res.status(403).json({ message: "You do not have permission to access support tickets" });
     }
-    // admin sees everything
 
     if (status) filter.status = status;
 
@@ -55,7 +61,7 @@ router.get("/", verifyToken, async (req, res) => {
 });
 
 // GET /api/support/:id
-router.get("/:id", verifyToken, async (req, res) => {
+router.get("/:id", verifyToken, validateRequest(ticketIdParamsSchema, "params"), async (req, res) => {
   try {
     const ticket = await SupportTicketModel.findById(req.params.id)
       .populate("customer", "name email")
@@ -66,11 +72,16 @@ router.get("/:id", verifyToken, async (req, res) => {
       return res.status(404).json({ message: "Ticket not found" });
     }
 
-    if (
-      req.user.role === "customer" &&
-      ticket.customer._id.toString() !== req.user._id.toString()
-    ) {
+    const isOwner = ticket.customer._id.toString() === req.user._id.toString();
+    const isAssignedOrUnassigned = !ticket.assignedTo || ticket.assignedTo._id.toString() === req.user._id.toString();
+    if (req.user.role === "customer" && !isOwner) {
       return res.status(403).json({ message: "This is not your ticket" });
+    }
+    if (req.user.role === "support" && !isAssignedOrUnassigned) {
+      return res.status(403).json({ message: "This ticket is assigned to another agent" });
+    }
+    if (!["customer", "support", "admin"].includes(req.user.role)) {
+      return res.status(403).json({ message: "You do not have permission to access support tickets" });
     }
 
     res.status(200).json({ ticket });
@@ -80,23 +91,24 @@ router.get("/:id", verifyToken, async (req, res) => {
 });
 
 // POST /api/support/:id/messages — customer or support/admin can reply
-router.post("/:id/messages", verifyToken, async (req, res) => {
+router.post("/:id/messages", verifyToken, validateRequest(ticketIdParamsSchema, "params"), validateRequest(ticketMessageSchema), async (req, res) => {
   try {
     const { text } = req.body;
-    if (!text) {
-      return res.status(400).json({ message: "text is required" });
-    }
-
     const ticket = await SupportTicketModel.findById(req.params.id);
     if (!ticket) {
       return res.status(404).json({ message: "Ticket not found" });
     }
 
-    if (
-      req.user.role === "customer" &&
-      ticket.customer.toString() !== req.user._id.toString()
-    ) {
+    const isOwner = ticket.customer.toString() === req.user._id.toString();
+    const isAssignedOrUnassigned = !ticket.assignedTo || ticket.assignedTo.toString() === req.user._id.toString();
+    if (req.user.role === "customer" && !isOwner) {
       return res.status(403).json({ message: "This is not your ticket" });
+    }
+    if (req.user.role === "support" && !isAssignedOrUnassigned) {
+      return res.status(403).json({ message: "This ticket is assigned to another agent" });
+    }
+    if (!["customer", "support", "admin"].includes(req.user.role)) {
+      return res.status(403).json({ message: "You do not have permission to access support tickets" });
     }
 
     ticket.messages.push({ sender: req.user._id, text });
@@ -114,9 +126,12 @@ router.post("/:id/messages", verifyToken, async (req, res) => {
 });
 
 // PATCH /api/support/:id/assign — [admin] assign to a support agent
-router.patch("/:id/assign", verifyToken, verifyRole("admin"), async (req, res) => {
+router.patch("/:id/assign", verifyToken, verifyRole("admin"), validateRequest(ticketIdParamsSchema, "params"), validateRequest(assignTicketSchema), async (req, res) => {
   try {
     const { supportAgentId } = req.body;
+
+    const agent = await UserModel.findOne({ _id: supportAgentId, role: "support", isActive: true });
+    if (!agent) return res.status(400).json({ message: "An active support agent is required" });
 
     const ticket = await SupportTicketModel.findByIdAndUpdate(
       req.params.id,
@@ -135,24 +150,20 @@ router.patch("/:id/assign", verifyToken, verifyRole("admin"), async (req, res) =
 });
 
 // PATCH /api/support/:id/status — [support/admin] update status
-router.patch("/:id/status", verifyToken, verifyRole("support", "admin"), async (req, res) => {
+router.patch("/:id/status", verifyToken, verifyRole("support", "admin"), validateRequest(ticketIdParamsSchema, "params"), validateRequest(ticketStatusSchema), async (req, res) => {
   try {
     const { status } = req.body;
-    const validStatuses = ["open", "in_progress", "resolved", "closed"];
-
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({ message: `status must be one of: ${validStatuses.join(", ")}` });
-    }
-
-    const ticket = await SupportTicketModel.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true }
-    );
+    const ticket = await SupportTicketModel.findById(req.params.id);
 
     if (!ticket) {
       return res.status(404).json({ message: "Ticket not found" });
     }
+
+    if (req.user.role === "support" && ticket.assignedTo && ticket.assignedTo.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "This ticket is assigned to another agent" });
+    }
+    ticket.status = status;
+    await ticket.save();
 
     res.status(200).json({ message: `Ticket status set to ${status}`, ticket });
   } catch (err) {
