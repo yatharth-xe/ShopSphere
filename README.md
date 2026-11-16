@@ -1,293 +1,114 @@
 # ShopSphere
 
-A full-stack, multi-vendor e-commerce marketplace built on the MERN stack, supporting independent sellers, role-based access across five user types, a complete order fulfillment lifecycle, and AI-assisted product listings.
+ShopSphere is a multi-vendor e-commerce application developed as a Software Engineering course project. Customers can browse a shared catalogue and place multi-store orders; sellers manage stores and products; administrators moderate marketplace data; and support agents handle tickets.
 
-**Live demo:** https://shop-sphere-delta-coral.vercel.app
-**API base URL:** https://shopsphere-4c0v.onrender.com/api
+The project demonstrates requirements-driven modular design with a React frontend, Express REST API, MongoDB/Mongoose persistence, role-based security, validation, and automated backend tests.
 
-> Note: the backend is hosted on Render's free tier, which spins down after periods of inactivity. The first request after idle time may take 30–60 seconds to respond while the server wakes up.
+## Main features
 
----
+- Public active-product catalogue with variants, categories, search/filtering, reviews, and wishlist support.
+- Customer registration/login, profile and address management, cart, checkout request, order history, and support tickets.
+- Seller store setup, product create/edit/archive, seller dashboard, stock update validation, and seller order/return views.
+- Admin dashboards plus user, staff, category, store, and product moderation tools.
+- Support ticket conversations, assignment, and status updates.
+- JWT access/refresh authentication, role protection, request validation, rate limiting, and forced staff password changes.
+- Stage 3 inventory service and immutable inventory-effect ledger, currently integrated with seller stock/product edits and covered by replica-set tests.
 
-## Table of Contents
+## Current implementation boundary
 
-- [Overview](#overview)
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Architecture](#architecture)
-- [Getting Started](#getting-started)
-- [Environment Variables](#environment-variables)
-- [Project Structure](#project-structure)
-- [API Overview](#api-overview)
-- [Roles & Permissions](#roles--permissions)
-- [Order Lifecycle](#order-lifecycle)
-- [AI Integration](#ai-integration)
-- [Deployment](#deployment)
-- [Known Limitations](#known-limitations)
-- [License](#license)
+Stage 3 inventory infrastructure is implemented and tested, but it is **not yet integrated** with checkout, order-status changes, or returns/refunds. A real payment gateway is not implemented; orders store payment method/status metadata only. The delivery dashboard is not demo-ready because its frontend expects API endpoints that the backend does not currently expose.
 
----
+## Technology stack
 
-## Overview
+| Area | Technology |
+|---|---|
+| Frontend | React 18, Vite, React Router, Tailwind CSS, Axios, Lucide React |
+| Backend | Node.js, Express 5, MongoDB, Mongoose 9 |
+| Security/validation | JWT, bcrypt, Zod, express-rate-limit |
+| Testing | node:test, Supertest, mongodb-memory-server |
+| Optional AI integrations | Groq text generation and Google Gemini embeddings |
 
-ShopSphere is a marketplace where multiple independent sellers list and manage their own products under a single storefront, while customers shop across all of them in one unified cart and checkout. It was built as a capstone project to demonstrate a production-shaped MERN application: REST APIs, MongoDB schema design, JWT authentication with refresh tokens, role-based authorization, a multi-vendor order-splitting and state-machine system, and AI-assisted content generation.
+## Screenshots
 
-## Features
+No repository-managed screenshots are currently available. Add verified screenshots before final submission if desired.
 
-**Catalog & Commerce**
-- Multi-vendor product catalog with categories, variants, and per-variant inventory
-- Cart that splits automatically into per-seller sub-orders at checkout, under a single customer-facing order
-- Inventory reservation system — stock is held during checkout and only committed on order confirmation, preventing overselling
-- Full order state machine: `placed → confirmed → packed → shipped → delivered`, with `cancelled`, `returned`, and `refunded` branches
-- Coupons (percentage/flat, usage limits, minimum order value)
-- Reviews tied to verified purchases, with a moderation queue and seller replies
-- Return/refund request workflow, separate from but synchronized with order status
-- Wishlist
-
-**Accounts & Access**
-- JWT authentication (short-lived access token + long-lived refresh token)
-- Five roles: Customer, Seller, Admin, Support Agent, Delivery Partner. Public registration creates customer accounts; an admin provisions seller, support, and delivery accounts.
-- Password change and development-only password reset token flow; production reset delivery is unavailable until an email provider is configured.
-- Role-based route protection on both API and frontend
-
-**Operations**
-- Seller dashboard: revenue, order breakdown, low-stock alerts, top products
-- Admin dashboard: platform-wide stats, pending store/product approvals
-- Store and product approval workflows
-- Support ticket system
-- In-app notifications, triggered automatically on key events (order status changes, approvals, review moderation)
-- Audit logging on administrative actions
-
-**AI**
-- AI-generated product descriptions and key selling points from structured attributes (via Groq)
-- Semantic product search using vector embeddings (via Google Gemini), auto-indexed on product approval
-
-## Tech Stack
-
-**Frontend**
-- React (Vite)
-- React Router
-- Tailwind CSS
-- Axios
-- Context API for global state (auth, cart)
-
-**Backend**
-- Node.js / Express
-- MongoDB with Mongoose
-- JWT (access + refresh token pattern)
-- bcrypt for password hashing
-
-**AI Services**
-- Groq (`openai/gpt-oss-120b`) — text generation for product descriptions
-- Google Gemini (`gemini-embedding-001`) — text embeddings for semantic search
-
-**Infrastructure**
-- MongoDB Atlas — production database
-- Render — backend hosting
-- Vercel — frontend hosting
-
-## Architecture
-
-```
-┌─────────────┐      HTTPS       ┌──────────────┐      Mongoose       ┌─────────────┐
-│  React SPA  │ ───────────────▶ │  Express API  │ ──────────────────▶ │  MongoDB    │
-│  (Vercel)   │ ◀─────────────── │  (Render)     │ ◀────────────────── │  Atlas      │
-└─────────────┘   JSON / REST    └──────┬───────┘                     └─────────────┘
-                                         │
-                                         ├──▶ Groq API (description generation)
-                                         └──▶ Gemini API (embeddings / semantic search)
+```text
+Suggested screenshots:
+- Customer catalogue/cart/checkout
+- Seller product management
+- Admin moderation dashboard
+- Support ticket workflow
 ```
 
-Authentication uses a short-lived JWT access token (sent as a Bearer header) paired with a longer-lived refresh token. The frontend's Axios instance automatically retries a failed request once after silently refreshing an expired access token.
-
-## Getting Started
+## Quick start
 
 ### Prerequisites
-- Node.js 18+
-- MongoDB configured as a replica set for local development. Phase 2 uses multi-document transactions for checkout, inventory, and order-state work; a standalone `mongod` does not support those transactions. Use [MongoDB Community Server](https://www.mongodb.com/try/download/community) + [Compass](https://www.mongodb.com/products/compass), or a free [MongoDB Atlas](https://www.mongodb.com/cloud/atlas/register) cluster.
-- API keys: [Groq](https://console.groq.com) (free) and [Google Gemini](https://aistudio.google.com/apikey) (free tier)
 
-### Local MongoDB Replica Set
+- Node.js compatible with the lockfiles.
+- MongoDB connection for normal backend use. Use a replica set for transaction-capable inventory development.
+- Optional Groq/Gemini keys only if demonstrating AI routes.
 
-For a single-node local replica set, start MongoDB with a replica-set name and initialize it once:
-
-```bash
-mongod --replSet rs0 --dbpath <your-local-mongodb-data-directory>
-mongosh --eval "rs.initiate()"
-```
-
-Use the replica-set connection string in `backend/.env`:
-
-```env
-MONGODB_URI=mongodb://127.0.0.1:27017/shopsphere?replicaSet=rs0
-```
-
-### Backend Setup
+### Backend
 
 ```bash
 cd backend
 npm install
+node server.js
 ```
 
-Create a `.env` file in `backend/` (see [Environment Variables](#environment-variables) below).
+The backend defaults to port `5000`. There is no `npm run dev` script in the current backend package.
 
-```bash
-npm run dev
-```
-
-The API will run on `http://localhost:4000` (or the port set in `.env`).
-
-### Frontend Setup
+### Frontend
 
 ```bash
 cd frontend
 npm install
-```
-
-In `src/api/axiosInstance.js`, confirm `BASE_URL` points at your backend (defaults to `http://localhost:4000/api` for local development).
-
-```bash
 npm run dev
 ```
 
-The app will run on `http://localhost:5173`.
+Important: `frontend/src/api/axiosInstance.js` currently targets the deployed Render API URL. Starting the frontend locally does not automatically direct it to a locally started backend; verify the intended environment pairing before a demo.
 
-### Creating an Admin Account
+## Environment variables
 
-Admin accounts cannot be created through public registration by design. To get one:
-1. Register a normal account through the app.
-2. In MongoDB Compass (or Atlas), open the `users` collection and manually change that document's `role` field to `"admin"`.
-3. Log out and log back in. Admin accounts are bootstrapped manually and cannot be created through public registration or the staff creation endpoint.
-
-### Creating Staff Accounts
-
-An authenticated admin can create seller, support, and delivery accounts from **Admin → Manage Users**. The server generates a temporary password and displays it once in the admin response. Share it securely; the account must change it at first login before using other protected routes. This endpoint cannot create admin accounts.
-
-## Environment Variables
-
-Backend `.env`:
+Create `backend/.env` without committing it:
 
 ```env
-PORT=4000
-MONGODB_URI=mongodb://127.0.0.1:27017/shopsphere?replicaSet=rs0
-ACCESS_TOKEN_SECRET=<random 32+ character string>
-REFRESH_TOKEN_SECRET=<a different random 32+ character string>
-GROQ_API_KEY=<your Groq API key>
-GEMINI_API_KEY=<your Gemini API key>
+PORT=5000
+MONGODB_URI=<MongoDB connection URI>
+ACCESS_TOKEN_SECRET=<random secret>
+REFRESH_TOKEN_SECRET=<different random secret>
+GROQ_API_KEY=<optional>
+GEMINI_API_KEY=<optional>
 EXPOSE_DEV_RESET_TOKEN=false
 ```
 
-Password reset email delivery is not configured. In a non-production environment only, set `EXPOSE_DEV_RESET_TOKEN=true` to return the reset token for local testing. The token is never logged, and production responses never include it. Until an email provider is configured, production password-reset requests return a generic response but do not send a reset link or create a usable token.
+`NODE_ENV` also affects password-reset behavior. Production password-reset email delivery is not configured. Never commit secrets, tokens, API keys, or passwords.
 
-> Never commit `.env` to version control. Confirm it's listed in `.gitignore` before pushing.
-
-### Backend Tests
-
-Run backend tests from `backend/`:
+## Testing
 
 ```bash
+cd backend
 npm test
+
+cd ../frontend
+npm run lint
+npm run build
 ```
 
-Tests start an isolated single-node in-memory MongoDB replica set through `mongodb-memory-server`. They do not use `MONGODB_URI` and do not connect to the local, development, or production ShopSphere database. The replica set is stopped after the test process completes, and collections are cleared before each test.
+The latest confirmed backend test result is **37 passing tests**. Backend tests use an isolated in-memory MongoDB replica set and do not connect to `MONGODB_URI` or a real ShopSphere database. The latest confirmed frontend lint run had no errors and 12 existing warnings; the production build passed.
 
-## Project Structure
+## Documentation
 
-```
-ShopSphere/
-├── backend/
-│   ├── api/              # Route handlers, grouped by resource
-│   ├── models/            # Mongoose schemas + shared model-layer logic
-│   │   └── orderStateMachine.js
-│   │   └── notifyUser.js
-│   ├── middleware/
-│   │   └── verifyToken.js # JWT verification + role-based guards
-│   └── server.js
-└── frontend/
-    ├── src/
-    │   ├── api/           # Axios instance with token refresh interceptor
-    │   ├── context/       # AuthContext, CartContext (React Context API)
-    │   ├── components/
-    │   │   ├── common/    # Navbar, ProtectedRoute, Loader
-    │   │   └── product/   # ProductCard
-    │   ├── pages/
-    │   │   ├── seller/    # Seller dashboard, store, product management
-    │   │   └── admin/     # Admin dashboard, approvals, user management
-    │   └── App.jsx         # Route definitions
-    └── index.html
-```
+- [Project overview](docs/01-project-overview.md)
+- [Architecture and folder structure](docs/02-architecture-and-folder-structure.md)
+- [Data model and roles](docs/03-data-model-and-roles.md)
+- [API overview](docs/04-api-overview.md)
+- [Security and authentication](docs/05-security-and-authentication.md)
+- [Commerce and inventory workflows](docs/06-commerce-and-inventory-workflows.md)
+- [Setup, testing, and demo preparation](docs/07-setup-testing-and-demo.md)
+- [Known limitations and future work](docs/08-known-limitations-and-future-work.md)
+- [Live demonstration runbook](docs/09-demo-runbook.md)
 
-## API Overview
+## Demonstration note
 
-All endpoints are prefixed with `/api`. Full route list by resource:
-
-| Resource | Base Path | Notes |
-|---|---|---|
-| Auth | `/auth` | register, login, refresh-token, logout, forgot/reset password |
-| Users | `/users` | profile, addresses, admin user management |
-| Wishlist | `/wishlist` | add/remove/view |
-| Stores | `/stores` | create, browse, approve; `/stores/admin/all` for admin moderation view |
-| Categories | `/categories` | nested category CRUD |
-| Products | `/products` | CRUD, search/filter, stock updates; `/products/admin/all` for moderation |
-| Cart | `/cart` | add/update/remove items |
-| Orders | `/orders` | checkout, status transitions, role-aware listing |
-| Coupons | `/coupons` | create, validate, apply |
-| Reviews | `/reviews` | verified-purchase reviews, moderation |
-| Returns | `/returns` | return/refund request workflow |
-| Support | `/support` | support ticket threads |
-| Notifications | `/notifications` | in-app notifications |
-| Delivery | `/delivery` | delivery partner's assigned shipments |
-| Dashboard | `/dashboard` | seller and admin analytics |
-| Audit Logs | `/audit-logs` | admin action history |
-| AI | `/ai` | description generation, semantic search |
-
-Most write operations require a valid `Authorization: Bearer <token>` header and are further restricted by role.
-
-## Roles & Permissions
-
-| Role | Capabilities |
-|---|---|
-| **Customer** | Browse, cart, checkout, order history, reviews, returns, wishlist, support tickets |
-| **Seller** | Store setup, product CRUD, order fulfillment, seller dashboard, review replies |
-| **Admin** | Store/product approval, user management, category management, platform dashboard, audit log access |
-| **Support Agent** | Support ticket handling, return/refund processing |
-| **Delivery Partner** | View and update status of assigned shipments |
-
-## Order Lifecycle
-
-A single checkout can span multiple sellers. One `Order` is created per checkout, containing an array of `subOrders` — one per seller involved — each progressing independently through its own status:
-
-```
-placed → confirmed → packed → shipped → delivered
-   │         │           │
-   └── cancelled ─────────┘
-                              delivered → returned → refunded
-```
-
-Inventory is reserved at checkout and only committed (stock actually decremented) when a sub-order is confirmed, preventing race conditions between simultaneous checkouts on the same stock.
-
-## AI Integration
-
-| Feature | Provider | Model |
-|---|---|---|
-| Product description generation | Groq | `openai/gpt-oss-120b` |
-| Semantic search embeddings | Google Gemini | `gemini-embedding-001` |
-
-Product descriptions are generated from structured attributes (title, category, key-value attributes) on seller request. Semantic search embeds product text into vectors on admin approval, and ranks search queries by cosine similarity rather than keyword matching — so a query like "warm winter clothing" can surface a product titled "Insulated Jacket" with no shared keywords.
-
-## Deployment
-
-- **Backend** is deployed on Render, connected to a MongoDB Atlas cluster. Environment variables are set directly in Render's dashboard (not read from `.env`, which is gitignored).
-- **Frontend** is deployed on Vercel, pointed at the Render backend URL.
-- Local development and production use **separate databases** — data created locally (via Compass) does not appear in the deployed app, and vice versa.
-
-## Known Limitations
-
-- Backend security/API tests run with `npm test` in `backend/`; frontend automated tests are not configured yet.
-- Password reset and email verification delivery are not connected to an email service. A reset token can be returned only for explicitly enabled non-production local testing; production password reset remains unavailable until email delivery is configured.
-- Product images are supplied as URLs; there is no file upload integration.
-- CORS is currently open to all origins (`cors()` with no restrictions) — acceptable for development/demo, but should be locked to specific origins before any real production use.
-
-## License
-
-This project was built for educational purposes as part of a MERN/MDSA capstone.
+Use dedicated demo data and accounts. Confirm an existing admin account, an approved seller store, an active product with stock, and customer/support accounts before the live demonstration. See the [demo runbook](docs/09-demo-runbook.md).
