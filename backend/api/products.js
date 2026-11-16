@@ -6,6 +6,7 @@ import { notifyUser } from "../models/notifyUser.js";
 import { verifyToken, verifyRole } from "../middleware/VerifyToken.js";
 import { validateRequest } from "../middleware/validateRequest.js";
 import { productCreateVariantsSchema, productUpdateVariantsSchema, stockParamsSchema, stockUpdateSchema } from "../validation/productSchemas.js";
+import { InventoryError, runInventoryTransaction, setSellerStock } from "../services/inventoryService.js";
 
 const router = Router();
 
@@ -162,77 +163,92 @@ router.post("/", verifyToken, verifyRole("seller"), async (req, res) => {
 // PATCH /api/products/:id — [seller/owner] update
 router.patch("/:id", verifyToken, verifyRole("seller"), async (req, res) => {
   try {
-    const product = await ProductModel.findById(req.params.id).populate("store");
-
-    if (!product) {
-      return res.status(404).json({ message: "Product not found" });
+    const parsedVariants = req.body.variants === undefined
+      ? null
+      : productUpdateVariantsSchema.safeParse(req.body.variants);
+    if (parsedVariants && !parsedVariants.success) {
+      return res.status(400).json({ message: "Invalid product variants" });
     }
 
-    if (product.store.seller.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: "You do not own this product" });
-    }
+    const product = await runInventoryTransaction(async (session) => {
+      const currentProduct = await ProductModel.findById(req.params.id).session(session);
+      if (!currentProduct) throw new InventoryError("Product not found", { status: 404, code: "PRODUCT_NOT_FOUND" });
 
-    const allowedFields = ["title", "description", "attributes", "tags", "category"];
-    allowedFields.forEach((field) => {
-      if (req.body[field] !== undefined) {
-        product[field] = req.body[field];
+      const store = await StoreModel.findById(currentProduct.store).session(session);
+      if (!store || store.seller.toString() !== req.user._id.toString()) {
+        throw new InventoryError("You do not own this product", { status: 403, code: "PRODUCT_NOT_OWNED" });
       }
+
+      if (parsedVariants) {
+        const incomingIds = parsedVariants.data.filter((variant) => variant._id).map((variant) => variant._id);
+        if (new Set(incomingIds).size !== incomingIds.length) {
+          throw new InventoryError("Product variants must not contain duplicate IDs", { status: 400, code: "DUPLICATE_VARIANT_ID" });
+        }
+
+        for (const currentVariant of currentProduct.variants) {
+          if (!incomingIds.includes(currentVariant._id.toString()) && currentVariant.reservedStock > 0) {
+            throw new InventoryError("Cannot remove a variant with reserved stock", { status: 400, code: "VARIANT_RESERVED" });
+          }
+        }
+
+        for (const incomingVariant of parsedVariants.data) {
+          if (!incomingVariant._id) continue;
+          const currentVariant = currentProduct.variants.id(incomingVariant._id);
+          if (!currentVariant) {
+            throw new InventoryError("Product variant does not belong to this product", { status: 400, code: "FOREIGN_VARIANT" });
+          }
+          await setSellerStock({
+            productId: currentProduct._id,
+            variantId: currentVariant._id,
+            stock: incomingVariant.stock,
+            session,
+          });
+        }
+      }
+
+      // Re-read after every atomic inventory write. This is the only document saved below,
+      // so a stale snapshot can never overwrite reservedStock or a concurrent stock change.
+      const editableProduct = await ProductModel.findById(req.params.id).session(session);
+      const allowedFields = ["title", "description", "attributes", "tags", "category"];
+      allowedFields.forEach((field) => {
+        if (req.body[field] !== undefined) editableProduct[field] = req.body[field];
+      });
+
+      if (parsedVariants) {
+        const incomingIds = parsedVariants.data.filter((variant) => variant._id).map((variant) => variant._id);
+        const currentVariants = [...editableProduct.variants];
+        for (const currentVariant of currentVariants) {
+          if (!incomingIds.includes(currentVariant._id.toString())) {
+            if (currentVariant.reservedStock > 0) {
+              throw new InventoryError("Cannot remove a variant with reserved stock", { status: 400, code: "VARIANT_RESERVED" });
+            }
+            currentVariant.deleteOne();
+          }
+        }
+
+        for (const incomingVariant of parsedVariants.data) {
+          const { _id, stock: _stock, ...variantChanges } = incomingVariant;
+          if (!_id) {
+            editableProduct.variants.push({ ...variantChanges, stock: incomingVariant.stock, reservedStock: 0 });
+            continue;
+          }
+          const currentVariant = editableProduct.variants.id(_id);
+          if (!currentVariant) {
+            throw new InventoryError("Product variant does not belong to this product", { status: 400, code: "FOREIGN_VARIANT" });
+          }
+          currentVariant.set(variantChanges);
+        }
+        editableProduct.basePrice = Math.min(...editableProduct.variants.map((variant) => variant.price));
+      }
+
+      editableProduct.status = "pending_review";
+      await editableProduct.save({ session });
+      return editableProduct;
     });
-
-    // Update existing variant subdocuments in place so cart and order references remain valid.
-    if (req.body.variants !== undefined) {
-      const parsedVariants = productUpdateVariantsSchema.safeParse(req.body.variants);
-      if (!parsedVariants.success) {
-        return res.status(400).json({ message: "Invalid product variants" });
-      }
-
-      const incomingIds = parsedVariants.data
-        .filter((variant) => variant._id)
-        .map((variant) => variant._id);
-      if (new Set(incomingIds).size !== incomingIds.length) {
-        return res.status(400).json({ message: "Product variants must not contain duplicate IDs" });
-      }
-
-      const currentVariants = [...product.variants];
-      for (const currentVariant of currentVariants) {
-        const retained = incomingIds.includes(currentVariant._id.toString());
-        if (!retained && currentVariant.reservedStock > 0) {
-          return res.status(400).json({ message: "Cannot remove a variant with reserved stock" });
-        }
-      }
-
-      for (const incomingVariant of parsedVariants.data) {
-        const { _id, ...variantChanges } = incomingVariant;
-        if (!_id) {
-          product.variants.push({ ...variantChanges, reservedStock: 0 });
-          continue;
-        }
-
-        const currentVariant = product.variants.id(_id);
-        if (!currentVariant) {
-          return res.status(400).json({ message: "Product variant does not belong to this product" });
-        }
-        if (variantChanges.stock < currentVariant.reservedStock) {
-          return res.status(400).json({ message: "Stock cannot be lower than reserved stock" });
-        }
-        currentVariant.set(variantChanges);
-      }
-
-      for (const currentVariant of currentVariants) {
-        if (!incomingIds.includes(currentVariant._id.toString())) {
-          currentVariant.deleteOne();
-        }
-      }
-
-      product.basePrice = Math.min(...product.variants.map((variant) => variant.price));
-    }
-
-    // any edit sends it back for re-review rather than silently changing a live listing
-    product.status = "pending_review";
-
-    await product.save();
+    await product.populate("store");
     res.status(200).json({ message: "Product updated, pending review", product });
   } catch (err) {
+    if (err instanceof InventoryError) return res.status(err.status).json({ message: err.message, code: err.code });
     res.status(500).json({ message: "Could not update product", error: err.message });
   }
 });
@@ -347,30 +363,24 @@ router.patch(
   async (req, res) => {
     try {
       const { stock } = req.body;
-
-      const product = await ProductModel.findById(req.params.id).populate("store");
-      if (!product) {
-        return res.status(404).json({ message: "Product not found" });
-      }
-
-      if (product.store.seller.toString() !== req.user._id.toString()) {
-        return res.status(403).json({ message: "You do not own this product" });
-      }
-
-      const variant = product.variants.id(req.params.variantId);
-      if (!variant) {
-        return res.status(404).json({ message: "Variant not found" });
-      }
-
-      if (stock < variant.reservedStock) {
-        return res.status(400).json({ message: "Stock cannot be lower than reserved stock" });
-      }
-
-      variant.stock = stock;
-      await product.save();
+      const variant = await runInventoryTransaction(async (session) => {
+        const product = await ProductModel.findById(req.params.id).session(session);
+        if (!product) throw new InventoryError("Product not found", { status: 404, code: "PRODUCT_NOT_FOUND" });
+        const store = await StoreModel.findById(product.store).session(session);
+        if (!store || store.seller.toString() !== req.user._id.toString()) {
+          throw new InventoryError("You do not own this product", { status: 403, code: "PRODUCT_NOT_OWNED" });
+        }
+        if (!product.variants.id(req.params.variantId)) {
+          throw new InventoryError("Variant not found", { status: 404, code: "VARIANT_NOT_FOUND" });
+        }
+        await setSellerStock({ productId: product._id, variantId: req.params.variantId, stock, session });
+        const updated = await ProductModel.findById(req.params.id).session(session);
+        return updated.variants.id(req.params.variantId);
+      });
 
       res.status(200).json({ message: "Stock updated", variant });
     } catch (err) {
+      if (err instanceof InventoryError) return res.status(err.status).json({ message: err.message, code: err.code });
       res.status(500).json({ message: "Could not update stock", error: err.message });
     }
   }
